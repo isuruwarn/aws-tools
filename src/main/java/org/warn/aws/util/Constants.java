@@ -27,5 +27,5 @@ public class Constants {
     public static final String MSG_INCORRECT_REGION = "Please configure correct region";
     public static final String MSG_NO_CONNECTIVITY = "Cannot connect to host. Please check internet connectivity";
 
-    public static final List<String> SUPPORTED_OPERATIONS_LIST = Arrays.asList( OPERATION_PUT );
+    public static final List<String> SUPPORTED_OPERATIONS_LIST = Arrays.asList( COMMAND_CREDENTIALS, OPERATION_PUT );
 }

@@ -34,8 +34,8 @@ public class AwsTools {
         // initial argument length check
         checkArgsLength( args.length, 1 );
 
-        PerformanceLogger pl = new PerformanceLogger();
-        pl.start();
+        PerformanceLogger performanceLogger = new PerformanceLogger();
+        performanceLogger.start();
 
         try {
             String currentAppVersion = PropertiesHelper
@@ -43,9 +43,9 @@ public class AwsTools {
                     .getProperty( ConfigConstants.APP_VERSION );
             log.info("Initializing org.warn.AwsTools version " + currentAppVersion );
 
-            String accessKey = null;
-            String secretKey = null;
-            String region = null;
+            String accessKey;
+            String secretKey;
+            String region;
 
             String command = args[0];
             if( Constants.COMMAND_CREDENTIALS.equals(command) ) {
@@ -74,7 +74,7 @@ public class AwsTools {
             log.info("Aws Region - " + region );
 
             if( StringUtils.isEmpty(accessKey) || StringUtils.isEmpty(accessKey) || StringUtils.isEmpty(accessKey) ) {
-                System.out.println("");
+                System.out.println();
                 System.err.println( Constants.MSG_CONFIGURE_CREDENTIALS );
                 System.out.println( Constants.USAGE );
                 System.exit(1);
@@ -105,7 +105,7 @@ public class AwsTools {
         } finally {
             executorService.shutdown();
             executorService.awaitTermination(5, TimeUnit.MINUTES );
-            pl.printStatistics();
+            performanceLogger.printStatistics();
         }
 
     }
