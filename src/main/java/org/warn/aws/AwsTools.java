@@ -1,8 +1,11 @@
 package org.warn.aws;
 
 import com.amazonaws.regions.Regions;
+import lombok.extern.java.Log;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.warn.aws.s3.client.S3ClientWrapper;
 import org.warn.aws.util.ConfigConstants;
 import org.warn.aws.util.Constants;
@@ -19,11 +22,12 @@ import java.util.concurrent.TimeUnit;
 public class AwsTools {
 
     static {
-        System.setProperty( ConfigConstants.AWSTOOLS_LOG_PROPERTY_NAME, ConfigConstants.AWSTOOLS_LOG_FILE );
+        MDC.put( ConfigConstants.AWSTOOLS_LOG_PROPERTY_NAME, ConfigConstants.AWSTOOLS_LOG_FILE );
     }
 
     private static final int MAX_CONCURRENT_TASKS = 20;
 
+//    private static final Logger log = LoggerFactory.getLogger( AwsTools.class );
 //    private static final Logger log = LoggingUtils.getFileOutputLogger();
 //    private static final Logger clog = LoggingUtils.getConsoleLogger();
     private static final ExecutorService executorService = Executors.newFixedThreadPool(MAX_CONCURRENT_TASKS);

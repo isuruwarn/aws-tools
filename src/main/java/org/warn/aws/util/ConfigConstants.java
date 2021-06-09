@@ -16,7 +16,7 @@ public class ConfigConstants {
 	public static final String AWSTOOLS_LOG_PROPERTY_NAME = "log.name"; // env variable name used in logback.xml 
 	public static final String AWSTOOLS_LOG_DIR = "logs";
 	public static final String AWSTOOLS_LOG_FILE = Env.USER_HOME_DIR + Env.FILE_SEPERATOR + AWSTOOLS_HOME_DIR_NAME + Env.FILE_SEPERATOR + 
-			AWSTOOLS_LOG_DIR + Env.FILE_SEPERATOR + "application-" + DateTimeUtil.dateSDF.format( System.currentTimeMillis() ) + ".log";
+			AWSTOOLS_LOG_DIR + Env.FILE_SEPERATOR + "aws-tools-" + DateTimeUtil.dateSDF.format( System.currentTimeMillis() ) + ".log";
 	public static final String LOGBACK_CONSOLE_OUTPUT_LOGGER = "stdout";
 	public static final String LOGBACK_FILE_OUTPUT_LOGGER = "fout";
 	

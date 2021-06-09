@@ -8,27 +8,31 @@
 		</layout>
 	</appender>
 
-	# File appender
-	<appender name="fout" class="ch.qos.logback.core.FileAppender">
-		<file>{log.name}</file>
-		<append>true</append>
-		<filter class="ch.qos.logback.classic.filter.LevelFilter">
-			<level>INFO</level>
-			<onMatch>ACCEPT</onMatch>
-			<onMismatch>DENY</onMismatch>
-		</filter>
-		<encoder>
-			# Pattern of log message for file appender
-			<pattern>%d{yyyy-MM-dd HH:mm:ss} %-5p %m%n</pattern>
-		</encoder>
+	<appender name="sift" class="ch.qos.logback.classic.sift.SiftingAppender">
+		<discriminator class="ch.qos.logback.classic.sift.MDCBasedDiscriminator">
+			<key>log.name</key>
+			<defaultValue>aws-tools.log</defaultValue>
+		</discriminator>
+
+		# File appender
+		<sift>
+			<appender name="fout" class="ch.qos.logback.core.FileAppender">
+				<file>${log.name}</file>
+				<append>true</append>
+				<encoder>
+					# Pattern of log message for file appender
+					<pattern>%d{yyyy-MM-dd HH:mm:ss} %-5p %m%n</pattern>
+				</encoder>
+			</appender>
+		</sift>
 	</appender>
 
 	<root level="INFO">
 		<appender-ref ref="stdout" />
-		<appender-ref ref="fout" />
+		<appender-ref ref="sift" />
 	</root>
 
 	<!-- suppress output info at startup -->
-	<statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+<!--	<statusListener class="ch.qos.logback.core.status.NopStatusListener" />-->
 
 </configuration>

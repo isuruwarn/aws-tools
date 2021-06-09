@@ -25,6 +25,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -38,7 +39,7 @@ public class S3ClientWrapper {
     private final TransferManager transferManager;
 
     public S3ClientWrapper( String accessKey, String secretKey, Regions region, ExecutorService executorService ) {
-        AWSCredentials credentials = new BasicAWSCredentials( accessKey,secretKey );
+        AWSCredentials credentials = new BasicAWSCredentials( accessKey, secretKey );
         AmazonS3 s3Client = AmazonS3ClientBuilder
                 .standard()
                 .withCredentials( new AWSStaticCredentialsProvider( credentials ) )
@@ -55,17 +56,17 @@ public class S3ClientWrapper {
         AtomicLong totalBytes = new AtomicLong();
         AtomicInteger successfulCount = new AtomicInteger();
         List<S3OperationRecord> failedUploads = Collections.synchronizedList( new ArrayList<>() );
-        Path initialPath = Path.of( localFilePath );
+        Path initialPath = Paths.get( localFilePath );
         File file = initialPath.toFile();
 
         try {
             if( file.isDirectory() ) {
                 String directoryName = initialPath.getName( initialPath.getNameCount() - 1 ).toString();
                 List<Pair<File, ObjectMetadata>> uploadMetadata = new ArrayList<>();
-                MultipleFileUpload upload = transferManager.uploadDirectory( bucketName, directoryName,
-                        initialPath.toFile(), true,
+                MultipleFileUpload upload = transferManager.uploadDirectory(
+                        bucketName, directoryName, initialPath.toFile(), true,
                         ( file1, objectMetadata ) -> uploadMetadata.add( Pair.of( file1, objectMetadata ) ) );
-                upload.addProgressListener( new S3ClientProgressListener( totalBytes ) );
+                upload.addProgressListener( getProgressListener( totalBytes ) );
                 upload.waitForCompletion();
 
                 for( Pair<File, ObjectMetadata> pair: uploadMetadata ) {
@@ -78,7 +79,7 @@ public class S3ClientWrapper {
 
             } else {
                 Upload upload = transferManager.upload( bucketName, file.getName() , initialPath.toFile() );
-                upload.addProgressListener( new S3ClientProgressListener( totalBytes ) );
+                upload.addProgressListener( getProgressListener( totalBytes ) );
                 upload.waitForCompletion();
 
                 long fileSizeLocal = file.length();
@@ -88,18 +89,26 @@ public class S3ClientWrapper {
 
         } catch( AmazonS3Exception e ) {
 
-            String errorMsg = null;
-            if( e.getErrorCode().equals("PermanentRedirect") ) { // StatusCode: 301
-                errorMsg = Constants.MSG_INCORRECT_REGION;
+            String errorMsg;
+            switch( e.getErrorCode() ) {
+                case "PermanentRedirect": // StatusCode: 301
+                    errorMsg = Constants.MSG_INCORRECT_REGION;
+                    break;
 
-            } else if( e.getErrorCode().equals("InvalidAccessKeyId") ) { // StatusCode: 403
-                errorMsg = Constants.MSG_INVALID_ACCESS_KEY;
+                case "InvalidAccessKeyId": // StatusCode: 403
+                    errorMsg = Constants.MSG_INVALID_ACCESS_KEY;
+                    break;
 
-            } else if( e.getErrorCode().equals("SignatureDoesNotMatch") ) { // StatusCode: 403
-                errorMsg = Constants.MSG_INVALID_SECRET_KEY;
+                case "SignatureDoesNotMatch": // StatusCode: 403
+                    errorMsg = Constants.MSG_INVALID_SECRET_KEY;
+                    break;
 
-            } else if( e.getErrorCode().equals("NoSuchBucket") ) { // StatusCode: 403
-                errorMsg = Constants.MSG_INVALID_BUCKET_NAME;
+                case "NoSuchBucket": // StatusCode: 403
+                    errorMsg = Constants.MSG_INVALID_BUCKET_NAME;
+                    break;
+
+                default:
+                    errorMsg = null;
             }
 
             if( errorMsg != null ) {
@@ -147,19 +156,15 @@ public class S3ClientWrapper {
         log.info("Total Byte(s) Transferred: " + totalBytes.get());
     }
 
-    private static class S3ClientProgressListener implements ProgressListener {
-        private final AtomicLong totalBytes;
-        public S3ClientProgressListener( AtomicLong totalBytes ) {
-            this.totalBytes = totalBytes;
-        }
-        @Override
-        public void progressChanged(ProgressEvent progressEvent) {
+    private ProgressListener getProgressListener( final AtomicLong totalBytes ) {
+        return ( progressEvent ) -> {
             long transferredBytes = progressEvent.getBytesTransferred();
             if( transferredBytes > 0 ) {
-                totalBytes.getAndAdd( transferredBytes );
-                log.info("S3 Upload Transfer Progress - Bytes: " + progressEvent.getBytesTransferred());
+                totalBytes.getAndAdd(transferredBytes);
+                // commenting out the log output since it is not logged in the correct location
+                //log.info("S3 Upload Transfer Progress - Bytes: " + progressEvent.getBytesTransferred());
             }
-        }
+        };
     }
 
     private void checkUploadStatus( long fileSizeLocal, long fileSizeS3, File file, AtomicInteger successfulCount,
