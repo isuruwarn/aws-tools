@@ -6,17 +6,16 @@ import java.util.List;
 public class Constants {
 
     public static final String USAGE =
-            "Name:\n" +
-            "   aws-tools - Client for managing AWS resources\n\n" +
-            "\nUsage:\n" +
-            "   credentials <accessKey> <secretKey> <region>\n" +
-            "   s3 put <fileOrDirectoryPath> <bucketName>\n";
+            "\nNAME\n" +
+            "   aws-tools -- Client for managing AWS resources\n\n" +
+            "SYNOPSIS\n" +
+            "   [credentials] accessKey secretKey region\n" +
+            "   [s3] [put] fileOrDirectoryPath bucketName (s3PathPrefix)\n";
 
     public static final String COMMAND_CREDENTIALS = "credentials";
     public static final String COMMAND_S3 = "s3";
 
     public static final String OPERATION_PUT = "put";
-    public static final String OPERATION_RETRY = "retry";
 
     public static final String MSG_UNSUPPORTED = "Unsupported operation!";
     public static final String MSG_CONFIGURE_CREDENTIALS = "Please configure the AWS credentials";

@@ -33,6 +33,6 @@
 	</root>
 
 	<!-- suppress output info at startup -->
-<!--	<statusListener class="ch.qos.logback.core.status.NopStatusListener" />-->
+	<statusListener class="ch.qos.logback.core.status.NopStatusListener" />
 
 </configuration>

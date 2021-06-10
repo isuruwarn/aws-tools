@@ -53,7 +53,7 @@ public class S3ClientWrapper {
                 .build();
     }
 
-    public void putObject( String bucketName, String localFilePath ) {
+    public void putObject( String bucketName, String localFilePath, String s3PathPrefix ) {
         AtomicLong totalBytes = new AtomicLong();
         AtomicInteger successfulCount = new AtomicInteger();
         List<S3OperationRecord> failedUploads = Collections.synchronizedList( new ArrayList<>() );
@@ -62,8 +62,10 @@ public class S3ClientWrapper {
 
         try {
             if( file.isDirectory() ) {
-                String directoryName = initialPath.getName( initialPath.getNameCount() - 1 ).toString();
+                String directoryName = formatPathPrefix( s3PathPrefix ) +
+                        initialPath.getName( initialPath.getNameCount() - 1 ).toString();
                 List<Pair<File, ObjectMetadata>> uploadMetadata = new ArrayList<>();
+
                 MultipleFileUpload upload = transferManager.uploadDirectory(
                         bucketName, directoryName, initialPath.toFile(), true,
                         ( file1, objectMetadata ) -> uploadMetadata.add( Pair.of( file1, objectMetadata ) ) );
@@ -192,6 +194,14 @@ public class S3ClientWrapper {
             log.info("S3 upload successful - file={}, fileSizeLocal={}, fileSizeS3={}",
                     localFilePath, fileSizeLocal, fileSizeS3);
         }
+    }
+
+    private String formatPathPrefix( String s3PathPrefix ) {
+        if( s3PathPrefix == null )
+            return "";
+        if( !s3PathPrefix.endsWith("/") )
+            s3PathPrefix = s3PathPrefix + "/";
+        return s3PathPrefix;
     }
 
 }

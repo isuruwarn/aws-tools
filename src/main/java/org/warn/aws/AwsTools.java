@@ -24,10 +24,6 @@ public class AwsTools {
     }
 
     private static final int MAX_CONCURRENT_TASKS = 20;
-
-//    private static final Logger log = LoggerFactory.getLogger( AwsTools.class );
-//    private static final Logger log = LoggingUtils.getFileOutputLogger();
-//    private static final Logger clog = LoggingUtils.getConsoleLogger();
     private static final ExecutorService executorService = Executors.newFixedThreadPool(MAX_CONCURRENT_TASKS);
     private static final UserConfig userConfig = new UserConfig( null, ConfigConstants.AWSTOOLS_DIR_NAME, ConfigConstants.CONFIG_FILE);
 
@@ -96,8 +92,13 @@ public class AwsTools {
                         executorService );
 
                 if( Constants.OPERATION_PUT.equals( s3Operation ) ) {
-                    log.info("Initializing S3 {} operation - BucketName={}", s3Operation, bucketName );
-                    s3ClientWrapper.putObject( bucketName, localFilePath );
+                    String s3PathPrefix = null;
+                    if( args.length > 4 )
+                        s3PathPrefix = args[4];
+
+                    log.info("Initializing S3 {} operation - BucketName={}, s3PathPrefix={}",
+                            s3Operation, bucketName, s3PathPrefix );
+                    s3ClientWrapper.putObject( bucketName, localFilePath, s3PathPrefix );
                 }
 
             } else {
