@@ -1,5 +1,7 @@
 <configuration debug="false" scan="false">
 
+	<timestamp key="currentDate" datePattern="yyyy-MM-dd"/>
+
 	# Console appender
 	<appender name="stdout" class="ch.qos.logback.core.ConsoleAppender">
 		<layout class="ch.qos.logback.classic.PatternLayout">
@@ -8,28 +10,22 @@
 		</layout>
 	</appender>
 
-	<appender name="sift" class="ch.qos.logback.classic.sift.SiftingAppender">
-		<discriminator class="ch.qos.logback.classic.sift.MDCBasedDiscriminator">
-			<key>log.name</key>
-			<defaultValue>aws-tools.log</defaultValue>
-		</discriminator>
+	# File appender
+	<appender name="fout" class="ch.qos.logback.core.FileAppender">
 
-		# File appender
-		<sift>
-			<appender name="fout" class="ch.qos.logback.core.FileAppender">
-				<file>${log.name}</file>
-				<append>true</append>
-				<encoder>
-					# Pattern of log message for file appender
-					<pattern>%d{yyyy-MM-dd HH:mm:ss} %-5p %m%n</pattern>
-				</encoder>
-			</appender>
-		</sift>
+		# the user.home system property is provided by the JVM
+		<file>${user.home}/.awstools/logs/aws-tools-${currentDate}.log</file>
+
+		<append>true</append>
+		<encoder>
+			# pattern of log message for file appender
+			<pattern>%d{yyyy-MM-dd HH:mm:ss} %-5p %m%n</pattern>
+		</encoder>
 	</appender>
 
 	<root level="INFO">
 		<appender-ref ref="stdout" />
-		<appender-ref ref="sift" />
+		<appender-ref ref="fout" />
 	</root>
 
 	<!-- suppress output info at startup -->

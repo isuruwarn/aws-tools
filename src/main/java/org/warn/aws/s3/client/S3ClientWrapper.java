@@ -176,8 +176,7 @@ public class S3ClientWrapper {
             long transferredBytes = progressEvent.getBytesTransferred();
             if( transferredBytes > 0 ) {
                 totalBytes.getAndAdd(transferredBytes);
-                // commenting out the log output since it is not logged in the correct location
-                //log.info("S3 Upload Transfer Progress - Bytes: " + progressEvent.getBytesTransferred());
+                log.info("S3 Upload Transfer Progress - Bytes: " + progressEvent.getBytesTransferred());
             }
         };
     }
