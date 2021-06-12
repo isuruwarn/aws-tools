@@ -20,13 +20,17 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.warn.aws.s3.model.S3OperationRecord;
 import org.warn.aws.util.ConfigConstants;
 import org.warn.aws.util.Constants;
+import org.warn.utils.file.FileHelper;
 import org.warn.utils.file.FileOperations;
+import org.warn.utils.perf.PerformanceLogger;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.net.UnknownHostException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -39,21 +43,27 @@ public class S3ClientWrapper {
 
     private final TransferManager transferManager;
 
+    private LocalDateTime timeAtLastPrintout = LocalDateTime.now();
+    private AtomicLong bytesAtLastPrintout = new AtomicLong();
+
     public S3ClientWrapper( String accessKey, String secretKey, Regions region, ExecutorService executorService ) {
         AWSCredentials credentials = new BasicAWSCredentials( accessKey, secretKey );
         AmazonS3 s3Client = AmazonS3ClientBuilder
                 .standard()
                 .withCredentials( new AWSStaticCredentialsProvider( credentials ) )
                 .withRegion( region )
+                .withAccelerateModeEnabled( true )
                 .build();
         this.transferManager = TransferManagerBuilder.standard()
                 .withS3Client( s3Client )
                 .withMultipartUploadThreshold( (long) (100 * 1024 * 1024) )
-                .withExecutorFactory(() -> executorService )
+                .withExecutorFactory( () -> executorService )
                 .build();
     }
 
     public void putObject( String bucketName, String localFilePath, String s3PathPrefix ) {
+        PerformanceLogger performanceLogger = new PerformanceLogger();
+        performanceLogger.start();
         AtomicLong totalBytes = new AtomicLong();
         AtomicInteger successfulCount = new AtomicInteger();
         List<S3OperationRecord> failedUploads = Collections.synchronizedList( new ArrayList<>() );
@@ -162,13 +172,18 @@ public class S3ClientWrapper {
                 FileOperations.appendToFileInHomeDir( csv.toString(), ConfigConstants.FAILED_S3_UPLOADS_CSV );
             }
         }
+        performanceLogger.printStatistics();
+        long duration = Math.max( performanceLogger.getLastCalculatedDuration(), 1 ); // avoid division by zero
+        double mbTransferred = totalBytes.get() / ( 1024 * 1024 );
+        double transferRate =  mbTransferred / duration;
 
-        log.info("---------------------------------------");
         log.info("S3 Upload Summary");
         log.info("---------------------------------------");
-        log.info("Successful Object(s): " + successfulCount.get());
-        log.info("Failed Object(s): " + failedUploads.size());
-        log.info("Total Byte(s) Transferred: " + totalBytes.get());
+        log.info("Successful Object(s): {}", successfulCount.get());
+        log.info("Failed Object(s): {}", failedUploads.size());
+        log.info("Total Data Transferred: {}", FileHelper.printFileSizeUserFriendly( totalBytes.get() ) );
+        log.info("Transfer Rate: {} (Mbps)", transferRate );
+        log.info("---------------------------------------");
     }
 
     private ProgressListener getProgressListener( final AtomicLong totalBytes ) {
@@ -176,7 +191,19 @@ public class S3ClientWrapper {
             long transferredBytes = progressEvent.getBytesTransferred();
             if( transferredBytes > 0 ) {
                 totalBytes.getAndAdd(transferredBytes);
-                log.info("S3 Upload Transfer Progress - Bytes: " + progressEvent.getBytesTransferred());
+
+                // log progress every 30 seconds
+                LocalDateTime now = LocalDateTime.now();
+                long timeSinceLastOutput = ChronoUnit.SECONDS.between( timeAtLastPrintout, now );
+                if( timeSinceLastOutput > 30 ) {
+
+                    double mbTransferred = ( totalBytes.get() - bytesAtLastPrintout.get() ) / ( 1024 * 1024 );
+                    double transferRate =  mbTransferred / timeSinceLastOutput;
+                    log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps)",
+                            FileHelper.printFileSizeUserFriendly( totalBytes.get() ), transferRate );
+                    timeAtLastPrintout = now;
+                    bytesAtLastPrintout.set( totalBytes.get() );
+                }
             }
         };
     }

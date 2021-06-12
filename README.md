@@ -4,6 +4,7 @@ AWS Tools
 Command-line tool for managing AWS resources.
 
 ## Currently Supported Operations
+- Configure AWS credentials
 - S3 Upload
 
 ## Usage
@@ -13,5 +14,5 @@ NAME
     
 SYNOPSIS
     [credentials] accessKey secretKey region
-    [s3] [put] fileOrDirectoryPath bucketName (s3PathPrefix)
+    [s3] [put] bucketName fileOrDirectoryPath (s3PathPrefix)
 ```

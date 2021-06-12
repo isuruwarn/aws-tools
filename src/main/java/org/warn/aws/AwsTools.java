@@ -3,13 +3,11 @@ package org.warn.aws;
 import com.amazonaws.regions.Regions;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.slf4j.MDC;
 import org.warn.aws.s3.client.S3ClientWrapper;
 import org.warn.aws.util.ConfigConstants;
 import org.warn.aws.util.Constants;
 import org.warn.utils.config.PropertiesHelper;
 import org.warn.utils.config.UserConfig;
-import org.warn.utils.perf.PerformanceLogger;
 
 import java.util.Scanner;
 import java.util.concurrent.ExecutorService;
@@ -20,22 +18,20 @@ import java.util.concurrent.TimeUnit;
 public class AwsTools {
 
     private static final int MAX_CONCURRENT_TASKS = 20;
-    private static final ExecutorService executorService = Executors.newFixedThreadPool(MAX_CONCURRENT_TASKS);
-    private static final UserConfig userConfig = new UserConfig( null, ConfigConstants.AWSTOOLS_DIR_NAME, ConfigConstants.CONFIG_FILE);
+    private static final ExecutorService executorService = Executors.newFixedThreadPool( MAX_CONCURRENT_TASKS );
+    private static final UserConfig userConfig = new UserConfig( null,
+            ConfigConstants.AWSTOOLS_DIR_NAME, ConfigConstants.CONFIG_FILE);
 
     public static void main( String [] args ) throws InterruptedException {
 
         // initial argument length check
         checkArgsLength( args.length, 1 );
 
-        PerformanceLogger performanceLogger = new PerformanceLogger();
-        performanceLogger.start();
-
         try {
             String currentAppVersion = PropertiesHelper
                     .loadFromResourcesDir( ConfigConstants.APP_PROPERTY_FILE_NAME )
                     .getProperty( ConfigConstants.APP_VERSION );
-            log.info("Initializing org.warn.AwsTools version " + currentAppVersion );
+            log.info("org.warn.AwsTools version " + currentAppVersion );
 
             String accessKey;
             String secretKey;
@@ -79,8 +75,8 @@ public class AwsTools {
                 checkArgsLength(args.length, 4);
 
                 String s3Operation = args[1];
-                String localFilePath = args[2];
-                String bucketName = args[3];
+                String bucketName = args[2];
+                String localFilePath = args[3];
 
                 validateOperation(s3Operation);
 
@@ -104,7 +100,6 @@ public class AwsTools {
         } finally {
             executorService.shutdown();
             executorService.awaitTermination(5, TimeUnit.MINUTES );
-            performanceLogger.printStatistics();
         }
 
     }

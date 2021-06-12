@@ -10,7 +10,7 @@ public class Constants {
             "   aws-tools -- Client for managing AWS resources\n\n" +
             "SYNOPSIS\n" +
             "   [credentials] accessKey secretKey region\n" +
-            "   [s3] [put] fileOrDirectoryPath bucketName (s3PathPrefix)\n";
+            "   [s3] [put] bucketName fileOrDirectoryPath (s3PathPrefix)\n";
 
     public static final String COMMAND_CREDENTIALS = "credentials";
     public static final String COMMAND_S3 = "s3";

@@ -3,5 +3,5 @@
 /.classpath
 /.project
 /.idea/
-*.DS_Store
-aws-tools.iml
+**.DS_Store
+**.iml
