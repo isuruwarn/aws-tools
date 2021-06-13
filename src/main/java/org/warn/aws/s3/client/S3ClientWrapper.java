@@ -199,8 +199,9 @@ public class S3ClientWrapper {
 
                     double mbTransferred = ( totalBytes.get() - bytesAtLastPrintout.get() ) / ( 1024 * 1024 );
                     double transferRate =  mbTransferred / timeSinceLastOutput;
-                    log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps)",
-                            FileHelper.printFileSizeUserFriendly( totalBytes.get() ), transferRate );
+                    log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps), ThreadId: {}, ThreadHashCode={}",
+                            FileHelper.printFileSizeUserFriendly( totalBytes.get() ), transferRate,
+                            Thread.currentThread().getName(), Thread.currentThread().hashCode() );
                     timeAtLastPrintout = now;
                     bytesAtLastPrintout.set( totalBytes.get() );
                 }
