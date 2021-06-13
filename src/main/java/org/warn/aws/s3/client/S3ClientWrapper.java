@@ -174,7 +174,7 @@ public class S3ClientWrapper {
         }
         performanceLogger.printStatistics();
         long duration = Math.max( performanceLogger.getLastCalculatedDuration(), 1 ); // avoid division by zero
-        double mbTransferred = totalBytes.get() / ( 1024 * 1024 );
+        double mbTransferred = ( totalBytes.get() * 8 ) / ( 1024 * 1024 );
         double transferRate =  mbTransferred / duration;
 
         log.info("S3 Upload Summary");
@@ -197,7 +197,7 @@ public class S3ClientWrapper {
                 long timeSinceLastOutput = ChronoUnit.SECONDS.between( timeAtLastPrintout, now );
                 if( timeSinceLastOutput > 30 ) {
 
-                    double mbTransferred = ( totalBytes.get() - bytesAtLastPrintout.get() ) / ( 1024 * 1024 );
+                    double mbTransferred = ( ( totalBytes.get() - bytesAtLastPrintout.get() ) * 8 ) / ( 1024 * 1024 );
                     double transferRate =  mbTransferred / timeSinceLastOutput;
                     log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps), ThreadId: {}, ThreadHashCode={}",
                             FileHelper.printFileSizeUserFriendly( totalBytes.get() ), transferRate,
