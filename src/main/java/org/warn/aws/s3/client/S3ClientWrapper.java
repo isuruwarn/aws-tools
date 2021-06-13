@@ -4,19 +4,15 @@ import com.amazonaws.AmazonClientException;
 import com.amazonaws.auth.AWSCredentials;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.event.ProgressListener;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3ClientBuilder;
 import com.amazonaws.services.s3.model.AmazonS3Exception;
+import com.amazonaws.services.s3.model.GetObjectMetadataRequest;
 import com.amazonaws.services.s3.model.ObjectMetadata;
-import com.amazonaws.services.s3.transfer.MultipleFileUpload;
-import com.amazonaws.services.s3.transfer.TransferManager;
-import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
-import com.amazonaws.services.s3.transfer.Upload;
+import com.amazonaws.services.s3.model.PutObjectResult;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.exception.ExceptionUtils;
-import org.apache.commons.lang3.tuple.Pair;
 import org.warn.aws.s3.model.S3OperationRecord;
 import org.warn.aws.util.ConfigConstants;
 import org.warn.aws.util.Constants;
@@ -26,80 +22,117 @@ import org.warn.utils.perf.PerformanceLogger;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.net.UnknownHostException;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Stream;
 
 @Slf4j
 public class S3ClientWrapper {
 
-    private final TransferManager transferManager;
-
-    private LocalDateTime timeAtLastPrintout = LocalDateTime.now();
-    private AtomicLong bytesAtLastPrintout = new AtomicLong();
+    private final AmazonS3 s3Client;
+    private final ExecutorService executorService;
 
     public S3ClientWrapper( String accessKey, String secretKey, Regions region, ExecutorService executorService ) {
         AWSCredentials credentials = new BasicAWSCredentials( accessKey, secretKey );
-        AmazonS3 s3Client = AmazonS3ClientBuilder
+        this.s3Client = AmazonS3ClientBuilder
                 .standard()
                 .withCredentials( new AWSStaticCredentialsProvider( credentials ) )
                 .withRegion( region )
                 .withAccelerateModeEnabled( true )
                 .build();
-        this.transferManager = TransferManagerBuilder.standard()
-                .withS3Client( s3Client )
-                .withMultipartUploadThreshold( (long) (100 * 1024 * 1024) )
-                .withExecutorFactory( () -> executorService )
-                .build();
+        this.executorService = executorService;
     }
 
     public void putObject( String bucketName, String localFilePath, String s3PathPrefix ) {
         PerformanceLogger performanceLogger = new PerformanceLogger();
         performanceLogger.start();
+
         AtomicLong totalBytes = new AtomicLong();
         AtomicInteger successfulCount = new AtomicInteger();
         List<S3OperationRecord> failedUploads = Collections.synchronizedList( new ArrayList<>() );
-        Path initialPath = Paths.get( localFilePath );
-        File file = initialPath.toFile();
+        List<CompletableFuture<Void>> cfList = new ArrayList<>();
+        Path initialPath = Path.of( localFilePath );
+
+        try( Stream<Path> files = Files.walk( initialPath ) ) {
+            files.forEach( path -> {
+                File f = path.toFile();
+                if( f.isFile() ) {
+                    String key = formatPathPrefix( s3PathPrefix ) +
+                            path.toString().replace( initialPath.getParent().toString() + "/", "" );
+                    CompletableFuture<Void> cf = CompletableFuture.runAsync( () -> {
+                        putObject( bucketName, key, f, successfulCount, failedUploads, totalBytes );
+                    }, executorService);
+                    cfList.add(cf);
+                }
+            });
+        } catch( IOException e ) {
+            System.err.println();
+            System.err.println( Constants.MSG_INVALID_FILEPATH );
+            System.exit(1);
+        }
+        CompletableFuture.allOf( cfList.toArray( new CompletableFuture[0] ) ).join();
+
+        if( failedUploads.size() > 0 ) {
+
+            StringBuilder csv = new StringBuilder();
+            csv.append( ConfigConstants.FAILED_S3_UPLOADS_CSV_HEADER_ROW );
+            for( S3OperationRecord r: failedUploads ) {
+                csv.append( r.toCsvString( ConfigConstants.ERROR_LOGS_CSV_DELIMITER ) );
+            }
+
+            // write failed records to error log
+            if( FileOperations.checkOrCreateDirInHomeDir( ConfigConstants.ERROR_LOGS_DIR ) ) {
+                FileOperations.appendToFileInHomeDir( csv.toString(), ConfigConstants.FAILED_S3_UPLOADS_CSV );
+            }
+        }
+        performanceLogger.printStatistics();
+        long duration = Math.max( performanceLogger.getLastCalculatedDuration(), 1 ); // avoid division by zero
+        double mbTransferred = totalBytes.get() * 8 / ( 1024 * 1024 );
+        double transferRate =  mbTransferred / duration;
+
+        log.info("S3 Upload Summary");
+        log.info("---------------------------------------");
+        log.info("Successful Object(s): {}", successfulCount.get());
+        log.info("Failed Object(s): {}", failedUploads.size());
+        log.info("Total Data Transferred: {}", FileHelper.printFileSizeUserFriendly( totalBytes.get() ) );
+        log.info("Transfer Rate: {} (Mbps)", transferRate );
+        log.info("---------------------------------------");
+    }
+
+    private void putObject( String bucketName, String key, File localFilePath, AtomicInteger successfulCount,
+                            List<S3OperationRecord> failedUploads, AtomicLong totalBytes ) {
 
         try {
-            if( file.isDirectory() ) {
-                String directoryName = formatPathPrefix( s3PathPrefix ) +
-                        initialPath.getName( initialPath.getNameCount() - 1 ).toString();
-                List<Pair<File, ObjectMetadata>> uploadMetadata = new ArrayList<>();
+            log.info("S3 upload - Key={}, ThreadName={}, ThreadId={}",
+                    key, Thread.currentThread().getName(), Thread.currentThread().hashCode() );
+            PutObjectResult result = s3Client.putObject( bucketName, key, localFilePath );
+            String eTag = result.getETag();
 
-                MultipleFileUpload upload = transferManager.uploadDirectory(
-                        bucketName, directoryName, initialPath.toFile(), true,
-                        ( file1, objectMetadata ) -> uploadMetadata.add( Pair.of( file1, objectMetadata ) ) );
-                upload.addProgressListener( getProgressListener( totalBytes ) );
-                upload.waitForCompletion();
+            // verify
+            GetObjectMetadataRequest metadataRequest = new GetObjectMetadataRequest( bucketName, key );
+            final ObjectMetadata objectMetadata = s3Client.getObjectMetadata(metadataRequest);
+            long fileSizeS3 = objectMetadata.getContentLength();
+            long fileSizeLocal = localFilePath.length();
 
-                for( Pair<File, ObjectMetadata> pair: uploadMetadata ) {
-                    File localFile = pair.getLeft();
-                    ObjectMetadata objectMetadata = pair.getRight();
-                    long fileSizeLocal = localFile.length();
-                    long fileSizeS3 = objectMetadata.getContentLength();
-                    checkUploadStatus( bucketName, "-", localFile.getAbsolutePath(), fileSizeLocal, fileSizeS3,
-                            successfulCount, failedUploads );
-                }
+            if( fileSizeLocal != fileSizeS3 ) {
+                log.error( "S3 upload FAILED - file={}, etag={}, fileSizeS3={}, fileSizeLocal={}",
+                        key, eTag, fileSizeS3, fileSizeLocal );
+                failedUploads.add( new S3OperationRecord() );
 
             } else {
-                Upload upload = transferManager.upload( bucketName, file.getName(), file );
-                upload.addProgressListener( getProgressListener( totalBytes ) );
-                upload.waitForCompletion();
-
-                long fileSizeLocal = file.length();
-                long fileSizeS3 = upload.getProgress().getBytesTransferred();
-                checkUploadStatus( bucketName, file.getName(), localFilePath, fileSizeLocal, fileSizeS3,
-                        successfulCount, failedUploads );
+                successfulCount.getAndIncrement();
+                totalBytes.getAndAdd( fileSizeS3 );
+                log.info( "S3 upload successful - file={}, etag={}, fileSizeS3={}, fileSizeLocal={}",
+                        key, eTag, fileSizeS3, fileSizeLocal );
             }
 
         } catch( AmazonS3Exception e ) {
@@ -133,8 +166,8 @@ public class S3ClientWrapper {
             }
 
             log.error( "Error during S3 upload - Key={}, StatusCode={}, ErrorCode={}",
-                    initialPath, e.getStatusCode(), e.getErrorCode() );
-            failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, errorMsg ) );
+                    key, e.getStatusCode(), e.getErrorCode() );
+            failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath.getAbsolutePath(), -1, errorMsg ) );
 
         } catch( AmazonClientException e ) {
             if( ExceptionUtils.indexOfType( e, UnknownHostException.class ) == 1 ) {
@@ -148,77 +181,9 @@ public class S3ClientWrapper {
                 System.exit(1);
             }
 
-            log.error( "Error during S3 upload - key={}, Error={}", initialPath, e.getMessage() );
-            failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, e.getMessage() ) );
+            log.error( "Error during S3 upload - key={}, Error={}", key, e.getMessage() );
+            failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath.getAbsolutePath(), -1, e.getMessage() ) );
 
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error( "Error during S3 upload - Key={}, Message={}", initialPath, e.getMessage() );
-
-        } finally {
-            transferManager.shutdownNow();
-        }
-
-        if( failedUploads.size() > 0 ) {
-
-            StringBuilder csv = new StringBuilder();
-            csv.append( ConfigConstants.FAILED_S3_UPLOADS_CSV_HEADER_ROW );
-            for( S3OperationRecord r: failedUploads ) {
-                csv.append( r.toCsvString( ConfigConstants.ERROR_LOGS_CSV_DELIMITER ) );
-            }
-
-            // write failed records to error log
-            if( FileOperations.checkOrCreateDirInHomeDir( ConfigConstants.ERROR_LOGS_DIR ) ) {
-                FileOperations.appendToFileInHomeDir( csv.toString(), ConfigConstants.FAILED_S3_UPLOADS_CSV );
-            }
-        }
-        performanceLogger.printStatistics();
-        long duration = Math.max( performanceLogger.getLastCalculatedDuration(), 1 ); // avoid division by zero
-        double mbTransferred = totalBytes.get() / ( 1024 * 1024 );
-        double transferRate =  mbTransferred / duration;
-
-        log.info("S3 Upload Summary");
-        log.info("---------------------------------------");
-        log.info("Successful Object(s): {}", successfulCount.get());
-        log.info("Failed Object(s): {}", failedUploads.size());
-        log.info("Total Data Transferred: {}", FileHelper.printFileSizeUserFriendly( totalBytes.get() ) );
-        log.info("Transfer Rate: {} (Mbps)", transferRate );
-        log.info("---------------------------------------");
-    }
-
-    private ProgressListener getProgressListener( final AtomicLong totalBytes ) {
-        return ( progressEvent ) -> {
-            long transferredBytes = progressEvent.getBytesTransferred();
-            if( transferredBytes > 0 ) {
-                totalBytes.getAndAdd(transferredBytes);
-
-                // log progress every 30 seconds
-                LocalDateTime now = LocalDateTime.now();
-                long timeSinceLastOutput = ChronoUnit.SECONDS.between( timeAtLastPrintout, now );
-                if( timeSinceLastOutput > 30 ) {
-
-                    double mbTransferred = ( totalBytes.get() - bytesAtLastPrintout.get() ) / ( 1024 * 1024 );
-                    double transferRate =  mbTransferred / timeSinceLastOutput;
-                    log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps)",
-                            FileHelper.printFileSizeUserFriendly( totalBytes.get() ), transferRate );
-                    timeAtLastPrintout = now;
-                    bytesAtLastPrintout.set( totalBytes.get() );
-                }
-            }
-        };
-    }
-
-    private void checkUploadStatus( String bucketName, String key, String localFilePath, long fileSizeLocal,
-        long fileSizeS3, AtomicInteger successfulCount, List<S3OperationRecord> failedUploads ) {
-
-        if( fileSizeLocal != fileSizeS3 ) {
-            failedUploads.add( new S3OperationRecord( bucketName, key, localFilePath, fileSizeLocal, "-" ) );
-            log.error("S3 upload FAILED - file={}, fileSizeLocal={}, fileSizeS3={}",
-                    localFilePath, fileSizeLocal, fileSizeS3);
-        } else {
-            successfulCount.getAndIncrement();
-            log.info("S3 upload successful - file={}, fileSizeLocal={}, fileSizeS3={}",
-                    localFilePath, fileSizeLocal, fileSizeS3);
         }
     }
 
