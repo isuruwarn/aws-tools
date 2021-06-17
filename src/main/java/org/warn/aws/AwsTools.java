@@ -31,7 +31,7 @@ public class AwsTools {
             String currentAppVersion = PropertiesHelper
                     .loadFromResourcesDir( ConfigConstants.APP_PROPERTY_FILE_NAME )
                     .getProperty( ConfigConstants.APP_VERSION );
-            log.info("org.warn.AwsTools version " + currentAppVersion );
+            log.info("org.warn.AwsTools Version [{}]", currentAppVersion );
 
             String accessKey;
             String secretKey;

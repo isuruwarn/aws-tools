@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 public class S3ClientWrapper {
@@ -45,6 +46,8 @@ public class S3ClientWrapper {
 
     private LocalDateTime timeAtLastPrintout = LocalDateTime.now();
     private AtomicLong bytesAtLastPrintout = new AtomicLong();
+    private AtomicReference<Float> minTransferRate = new AtomicReference<>( Float.MAX_VALUE );
+    private AtomicReference<Float> maxTransferRate = new AtomicReference<>( 0.0f );
 
     public S3ClientWrapper( String accessKey, String secretKey, Regions region, ExecutorService executorService ) {
         AWSCredentials credentials = new BasicAWSCredentials( accessKey, secretKey );
@@ -173,16 +176,22 @@ public class S3ClientWrapper {
             }
         }
         performanceLogger.printStatistics();
-        long duration = Math.max( performanceLogger.getLastCalculatedDuration(), 1 ); // avoid division by zero
-        double mbTransferred = ( totalBytes.get() * 8 ) / ( 1024 * 1024 );
-        double transferRate =  mbTransferred / duration;
+        float transferRate = calculateTransferRate( totalBytes.get(), performanceLogger.getLastCalculatedDuration() );
+
+        if( minTransferRate.get() == Float.MAX_VALUE || transferRate < minTransferRate.get() )
+            minTransferRate.set( transferRate );
+
+        if( maxTransferRate.get() == 0.0 || transferRate > maxTransferRate.get() )
+            maxTransferRate.set( transferRate );
 
         log.info("S3 Upload Summary");
         log.info("---------------------------------------");
         log.info("Successful Object(s): {}", successfulCount.get());
         log.info("Failed Object(s): {}", failedUploads.size());
         log.info("Total Data Transferred: {}", FileHelper.printFileSizeUserFriendly( totalBytes.get() ) );
-        log.info("Transfer Rate: {} (Mbps)", transferRate );
+        log.info("Overall Transfer Rate: {} (Mbps)", String.format( "%.2f", transferRate ) );
+        log.info("Minimum Transfer Rate: {} (Mbps)", String.format( "%.2f", minTransferRate.get() ) );
+        log.info("Maximum Transfer Rate: {} (Mbps)", String.format( "%.2f", maxTransferRate.get() ) );
         log.info("---------------------------------------");
     }
 
@@ -197,13 +206,19 @@ public class S3ClientWrapper {
                 long timeSinceLastOutput = ChronoUnit.SECONDS.between( timeAtLastPrintout, now );
                 if( timeSinceLastOutput > 30 ) {
 
-                    double mbTransferred = ( ( totalBytes.get() - bytesAtLastPrintout.get() ) * 8 ) / ( 1024 * 1024 );
-                    double transferRate =  mbTransferred / timeSinceLastOutput;
-                    log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps), ThreadId: {}, ThreadHashCode={}",
-                            FileHelper.printFileSizeUserFriendly( totalBytes.get() ), transferRate,
-                            Thread.currentThread().getName(), Thread.currentThread().hashCode() );
+                    float transferRate =  calculateTransferRate(
+                            totalBytes.get() - bytesAtLastPrintout.get(),  timeSinceLastOutput );
+                    log.info("S3 Upload Transfer Progress: {}, Transfer Rate: {} (Mbps), ThreadId: {}",
+                            FileHelper.printFileSizeUserFriendly( totalBytes.get() ), String.format("%.2f", transferRate),
+                            Thread.currentThread().getId() );
+
                     timeAtLastPrintout = now;
                     bytesAtLastPrintout.set( totalBytes.get() );
+
+                    if( transferRate < minTransferRate.get() )
+                        minTransferRate.set( transferRate );
+                    if( transferRate > maxTransferRate.get() )
+                        maxTransferRate.set( transferRate );
                 }
             }
         };
@@ -229,6 +244,15 @@ public class S3ClientWrapper {
         if( !s3PathPrefix.endsWith("/") )
             s3PathPrefix = s3PathPrefix + "/";
         return s3PathPrefix;
+    }
+
+    private float calculateTransferRate( long bytesTransferred, long durationInSeconds ) {
+        float transferRate = 0;
+        if( durationInSeconds > 0 ) {
+            float megaBitsTransferred = (bytesTransferred * 8f) / (1024f * 1024f);
+            transferRate = megaBitsTransferred / durationInSeconds; // Mbps
+        }
+        return transferRate;
     }
 
 }
