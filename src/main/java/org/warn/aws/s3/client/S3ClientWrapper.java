@@ -75,84 +75,17 @@ public class S3ClientWrapper {
 
         try {
             if( file.isDirectory() ) {
-                String directoryName = formatPathPrefix( s3PathPrefix ) +
-                        initialPath.getName( initialPath.getNameCount() - 1 ).toString();
-                List<Pair<File, ObjectMetadata>> uploadMetadata = new ArrayList<>();
-
-                MultipleFileUpload upload = transferManager.uploadDirectory(
-                        bucketName, directoryName, initialPath.toFile(), true,
-                        ( file1, objectMetadata ) -> uploadMetadata.add( Pair.of( file1, objectMetadata ) ) );
-                upload.addProgressListener( getProgressListener( totalBytes ) );
-                upload.waitForCompletion();
-
-                for( Pair<File, ObjectMetadata> pair: uploadMetadata ) {
-                    File localFile = pair.getLeft();
-                    ObjectMetadata objectMetadata = pair.getRight();
-                    long fileSizeLocal = localFile.length();
-                    long fileSizeS3 = objectMetadata.getContentLength();
-                    checkUploadStatus( bucketName, "-", localFile.getAbsolutePath(), fileSizeLocal, fileSizeS3,
-                            successfulCount, failedUploads );
-                }
+                uploadDirectory( bucketName, s3PathPrefix, initialPath, totalBytes, successfulCount, failedUploads);
 
             } else {
-                Upload upload = transferManager.upload( bucketName, file.getName(), file );
-                upload.addProgressListener( getProgressListener( totalBytes ) );
-                upload.waitForCompletion();
-
-                long fileSizeLocal = file.length();
-                long fileSizeS3 = upload.getProgress().getBytesTransferred();
-                checkUploadStatus( bucketName, file.getName(), localFilePath, fileSizeLocal, fileSizeS3,
-                        successfulCount, failedUploads );
+                uploadSingleFile( bucketName, file, totalBytes, localFilePath, successfulCount, failedUploads);
             }
 
         } catch( AmazonS3Exception e ) {
-
-            String errorMsg;
-            switch( e.getErrorCode() ) {
-                case "PermanentRedirect": // StatusCode: 301
-                    errorMsg = Constants.MSG_INCORRECT_REGION;
-                    break;
-
-                case "InvalidAccessKeyId": // StatusCode: 403
-                    errorMsg = Constants.MSG_INVALID_ACCESS_KEY;
-                    break;
-
-                case "SignatureDoesNotMatch": // StatusCode: 403
-                    errorMsg = Constants.MSG_INVALID_SECRET_KEY;
-                    break;
-
-                case "NoSuchBucket": // StatusCode: 403
-                    errorMsg = Constants.MSG_INVALID_BUCKET_NAME;
-                    break;
-
-                default:
-                    errorMsg = null;
-            }
-
-            if( errorMsg != null ) {
-                System.err.println();
-                System.err.println( errorMsg );
-                System.exit(1); // no point continuing since all requests will fail due to above error
-            }
-
-            log.error( "Error during S3 upload - Key={}, StatusCode={}, ErrorCode={}",
-                    initialPath, e.getStatusCode(), e.getErrorCode() );
-            failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, errorMsg ) );
+            handleAmazonS3Exception( e, bucketName, localFilePath, initialPath, failedUploads );
 
         } catch( AmazonClientException e ) {
-            if( ExceptionUtils.indexOfType( e, UnknownHostException.class ) == 1 ) {
-                System.err.println();
-                System.err.println( Constants.MSG_NO_CONNECTIVITY );
-                System.exit(1);
-
-            } else if( ExceptionUtils.indexOfType( e, FileNotFoundException.class ) == 1 ) {
-                System.err.println();
-                System.err.println( Constants.MSG_INVALID_FILEPATH );
-                System.exit(1);
-            }
-
-            log.error( "Error during S3 upload - key={}, Error={}", initialPath, e.getMessage() );
-            failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, e.getMessage() ) );
+            handleAmazonClientException( e, bucketName, localFilePath, initialPath, failedUploads );
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -161,38 +94,95 @@ public class S3ClientWrapper {
         } finally {
             transferManager.shutdownNow();
         }
+        postProcessing( failedUploads, successfulCount, totalBytes, performanceLogger );
+    }
 
-        if( failedUploads.size() > 0 ) {
+    private void uploadDirectory( String bucketName, String s3PathPrefix, Path initialPath, AtomicLong totalBytes,
+        AtomicInteger successfulCount, List<S3OperationRecord> failedUploads ) throws InterruptedException {
 
-            StringBuilder csv = new StringBuilder();
-            csv.append( ConfigConstants.FAILED_S3_UPLOADS_CSV_HEADER_ROW );
-            for( S3OperationRecord r: failedUploads ) {
-                csv.append( r.toCsvString( ConfigConstants.ERROR_LOGS_CSV_DELIMITER ) );
-            }
+        String directoryName = formatPathPrefix( s3PathPrefix ) +
+                initialPath.getName( initialPath.getNameCount() - 1 ).toString();
+        List<Pair<File, ObjectMetadata>> uploadMetadata = new ArrayList<>();
 
-            // write failed records to error log
-            if( FileOperations.checkOrCreateDirInHomeDir( ConfigConstants.ERROR_LOGS_DIR ) ) {
-                FileOperations.appendToFileInHomeDir( csv.toString(), ConfigConstants.FAILED_S3_UPLOADS_CSV );
-            }
+        MultipleFileUpload upload = transferManager.uploadDirectory(
+                bucketName, directoryName, initialPath.toFile(), true,
+                ( file1, objectMetadata ) -> uploadMetadata.add( Pair.of( file1, objectMetadata ) ) );
+        upload.addProgressListener( getProgressListener( totalBytes ) );
+        upload.waitForCompletion();
+
+        for( Pair<File, ObjectMetadata> pair: uploadMetadata ) {
+            File localFile = pair.getLeft();
+            ObjectMetadata objectMetadata = pair.getRight();
+            long fileSizeLocal = localFile.length();
+            long fileSizeS3 = objectMetadata.getContentLength();
+            checkUploadStatus( bucketName, "-", localFile.getAbsolutePath(), fileSizeLocal, fileSizeS3,
+                    successfulCount, failedUploads );
         }
-        performanceLogger.printStatistics();
-        float transferRate = calculateTransferRate( totalBytes.get(), performanceLogger.getLastCalculatedDuration() );
+    }
 
-        if( minTransferRate.get() == Float.MAX_VALUE || transferRate < minTransferRate.get() )
-            minTransferRate.set( transferRate );
+    private void uploadSingleFile( String bucketName, File file,AtomicLong totalBytes, String localFilePath,
+        AtomicInteger successfulCount, List<S3OperationRecord> failedUploads ) throws InterruptedException {
 
-        if( maxTransferRate.get() == 0.0 || transferRate > maxTransferRate.get() )
-            maxTransferRate.set( transferRate );
+        Upload upload = transferManager.upload( bucketName, file.getName(), file );
+        upload.addProgressListener( getProgressListener( totalBytes ) );
+        upload.waitForCompletion();
 
-        log.info("S3 Upload Summary");
-        log.info("---------------------------------------");
-        log.info("Successful Object(s): {}", successfulCount.get());
-        log.info("Failed Object(s): {}", failedUploads.size());
-        log.info("Total Data Transferred: {}", FileHelper.printFileSizeUserFriendly( totalBytes.get() ) );
-        log.info("Overall Transfer Rate: {} (Mbps)", String.format( "%.2f", transferRate ) );
-        log.info("Minimum Transfer Rate: {} (Mbps)", String.format( "%.2f", minTransferRate.get() ) );
-        log.info("Maximum Transfer Rate: {} (Mbps)", String.format( "%.2f", maxTransferRate.get() ) );
-        log.info("---------------------------------------");
+        long fileSizeLocal = file.length();
+        long fileSizeS3 = upload.getProgress().getBytesTransferred();
+        checkUploadStatus( bucketName, file.getName(), localFilePath, fileSizeLocal, fileSizeS3,
+                successfulCount, failedUploads );
+    }
+
+    private void handleAmazonS3Exception( AmazonS3Exception e, String bucketName, String localFilePath,
+                                          Path initialPath, List<S3OperationRecord> failedUploads ) {
+        String errorMsg;
+        switch( e.getErrorCode() ) {
+            case "PermanentRedirect": // StatusCode: 301
+                errorMsg = Constants.MSG_INCORRECT_REGION;
+                break;
+
+            case "InvalidAccessKeyId": // StatusCode: 403
+                errorMsg = Constants.MSG_INVALID_ACCESS_KEY;
+                break;
+
+            case "SignatureDoesNotMatch": // StatusCode: 403
+                errorMsg = Constants.MSG_INVALID_SECRET_KEY;
+                break;
+
+            case "NoSuchBucket": // StatusCode: 403
+                errorMsg = Constants.MSG_INVALID_BUCKET_NAME;
+                break;
+
+            default:
+                errorMsg = null;
+        }
+
+        if( errorMsg != null ) {
+            System.err.println();
+            System.err.println( errorMsg );
+            System.exit(1); // no point continuing since all requests will fail due to above error
+        }
+
+        log.error( "Error during S3 upload - Key={}, StatusCode={}, ErrorCode={}",
+                initialPath, e.getStatusCode(), e.getErrorCode() );
+        failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, errorMsg ) );
+    }
+
+    private void handleAmazonClientException( AmazonClientException e, String bucketName, String localFilePath,
+                                              Path initialPath, List<S3OperationRecord> failedUploads ) {
+        if( ExceptionUtils.indexOfType( e, UnknownHostException.class ) == 1 ) {
+            System.err.println();
+            System.err.println( Constants.MSG_NO_CONNECTIVITY );
+            System.exit(1);
+
+        } else if( ExceptionUtils.indexOfType( e, FileNotFoundException.class ) == 1 ) {
+            System.err.println();
+            System.err.println( Constants.MSG_INVALID_FILEPATH );
+            System.exit(1);
+        }
+
+        log.error( "Error during S3 upload - key={}, Error={}", initialPath, e.getMessage() );
+        failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, e.getMessage() ) );
     }
 
     private ProgressListener getProgressListener( final AtomicLong totalBytes ) {
@@ -236,6 +226,41 @@ public class S3ClientWrapper {
             log.info("S3 upload successful - file={}, fileSizeLocal={}, fileSizeS3={}",
                     localFilePath, fileSizeLocal, fileSizeS3);
         }
+    }
+
+    private void postProcessing( List<S3OperationRecord> failedUploads, AtomicInteger successfulCount,
+                                 AtomicLong totalBytes, PerformanceLogger performanceLogger ) {
+
+        if( failedUploads.size() > 0 ) {
+            StringBuilder csv = new StringBuilder();
+            csv.append( ConfigConstants.FAILED_S3_UPLOADS_CSV_HEADER_ROW );
+            for( S3OperationRecord r: failedUploads ) {
+                csv.append( r.toCsvString( ConfigConstants.ERROR_LOGS_CSV_DELIMITER ) );
+            }
+
+            // write failed records to error log
+            if( FileOperations.checkOrCreateDirInHomeDir( ConfigConstants.ERROR_LOGS_DIR ) ) {
+                FileOperations.appendToFileInHomeDir( csv.toString(), ConfigConstants.FAILED_S3_UPLOADS_CSV );
+            }
+        }
+        performanceLogger.printStatistics();
+        float transferRate = calculateTransferRate( totalBytes.get(), performanceLogger.getLastCalculatedDuration() );
+
+        if( minTransferRate.get() == Float.MAX_VALUE || transferRate < minTransferRate.get() )
+            minTransferRate.set( transferRate );
+
+        if( maxTransferRate.get() == 0.0 || transferRate > maxTransferRate.get() )
+            maxTransferRate.set( transferRate );
+
+        log.info("S3 Upload Summary");
+        log.info("---------------------------------------");
+        log.info("Successful Object(s): {}", successfulCount.get());
+        log.info("Failed Object(s): {}", failedUploads.size());
+        log.info("Total Data Transferred: {}", FileHelper.printFileSizeUserFriendly( totalBytes.get() ) );
+        log.info("Overall Transfer Rate: {} (Mbps)", String.format( "%.2f", transferRate ) );
+        log.info("Minimum Transfer Rate: {} (Mbps)", String.format( "%.2f", minTransferRate.get() ) );
+        log.info("Maximum Transfer Rate: {} (Mbps)", String.format( "%.2f", maxTransferRate.get() ) );
+        log.info("---------------------------------------");
     }
 
     private String formatPathPrefix( String s3PathPrefix ) {
