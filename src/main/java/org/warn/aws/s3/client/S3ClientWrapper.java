@@ -15,6 +15,7 @@ import com.amazonaws.services.s3.transfer.TransferManager;
 import com.amazonaws.services.s3.transfer.TransferManagerBuilder;
 import com.amazonaws.services.s3.transfer.Upload;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.warn.aws.s3.model.S3OperationRecord;
@@ -26,7 +27,9 @@ import org.warn.utils.perf.PerformanceLogger;
 
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.net.UnknownHostException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -34,14 +37,17 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 @Slf4j
 public class S3ClientWrapper {
 
+    private final ExecutorService executorService;
     private final TransferManager transferManager;
 
     private LocalDateTime timeAtLastPrintout = LocalDateTime.now();
@@ -57,6 +63,7 @@ public class S3ClientWrapper {
                 .withRegion( region )
                 .withAccelerateModeEnabled( true )
                 .build();
+        this.executorService = executorService;
         this.transferManager = TransferManagerBuilder.standard()
                 .withS3Client( s3Client )
                 .withMultipartUploadThreshold( (long) (100 * 1024 * 1024) )
@@ -64,7 +71,7 @@ public class S3ClientWrapper {
                 .build();
     }
 
-    public void putObject( String bucketName, String localFilePath, String s3PathPrefix ) {
+    public void putObject( String bucketName, String localFilePath, String s3PathPrefix, boolean uploadFromList ) {
         PerformanceLogger performanceLogger = new PerformanceLogger();
         performanceLogger.start();
         AtomicLong totalBytes = new AtomicLong();
@@ -74,11 +81,14 @@ public class S3ClientWrapper {
         File file = initialPath.toFile();
 
         try {
-            if( file.isDirectory() ) {
+            if(uploadFromList) {
+                uploadFromList( bucketName, s3PathPrefix, localFilePath, totalBytes, successfulCount, failedUploads );
+
+            } else if( file.isDirectory() ) {
                 uploadDirectory( bucketName, s3PathPrefix, initialPath, totalBytes, successfulCount, failedUploads);
 
             } else {
-                uploadSingleFile( bucketName, file, totalBytes, localFilePath, successfulCount, failedUploads);
+                uploadSingleFile( bucketName, s3PathPrefix, file, totalBytes, successfulCount, failedUploads);
             }
 
         } catch( AmazonS3Exception e ) {
@@ -88,8 +98,7 @@ public class S3ClientWrapper {
             handleAmazonClientException( e, bucketName, localFilePath, initialPath, failedUploads );
 
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            log.error( "Error during S3 upload - Key={}, Message={}", initialPath, e.getMessage() );
+            handleInterruptedException(e, initialPath);
 
         } finally {
             transferManager.shutdownNow();
@@ -97,11 +106,21 @@ public class S3ClientWrapper {
         postProcessing( failedUploads, successfulCount, totalBytes, performanceLogger );
     }
 
+    private void uploadFromList( String bucketName, String s3PathPrefix, String localFilePath, AtomicLong totalBytes,
+        AtomicInteger successfulCount, List<S3OperationRecord> failedUploads ) throws InterruptedException {
+        log.info("S3 Upload - uploading from file list - {}", localFilePath);
+        List<String> fileNames = FileOperations.readLines(localFilePath);
+        for(String fileName: fileNames) {
+            uploadSingleFile( bucketName, s3PathPrefix, new File(fileName), totalBytes, successfulCount, failedUploads);
+        }
+    }
+
     private void uploadDirectory( String bucketName, String s3PathPrefix, Path initialPath, AtomicLong totalBytes,
         AtomicInteger successfulCount, List<S3OperationRecord> failedUploads ) throws InterruptedException {
 
-        String directoryName = formatPathPrefix( s3PathPrefix ) +
-                initialPath.getName( initialPath.getNameCount() - 1 ).toString();
+        String directoryName = initialPath.subpath( 2, initialPath.getNameCount() ).toString();
+        if( s3PathPrefix != null )
+            directoryName = formatPathPrefix( s3PathPrefix );
         List<Pair<File, ObjectMetadata>> uploadMetadata = new ArrayList<>();
 
         MultipleFileUpload upload = transferManager.uploadDirectory(
@@ -120,16 +139,21 @@ public class S3ClientWrapper {
         }
     }
 
-    private void uploadSingleFile( String bucketName, File file,AtomicLong totalBytes, String localFilePath,
+    private void uploadSingleFile( String bucketName, String s3PathPrefix, File file, AtomicLong totalBytes,
         AtomicInteger successfulCount, List<S3OperationRecord> failedUploads ) throws InterruptedException {
 
-        Upload upload = transferManager.upload( bucketName, file.getName(), file );
+        Path initialPath = Paths.get( file.getAbsolutePath() );
+        String s3FileKey = initialPath.subpath( 2, initialPath.getNameCount() ).toString();
+        if( s3PathPrefix != null )
+            s3FileKey = formatPathPrefix( s3PathPrefix ) + file.getName();
+
+        Upload upload = transferManager.upload( bucketName, s3FileKey, file );
         upload.addProgressListener( getProgressListener( totalBytes ) );
         upload.waitForCompletion();
 
         long fileSizeLocal = file.length();
         long fileSizeS3 = upload.getProgress().getBytesTransferred();
-        checkUploadStatus( bucketName, file.getName(), localFilePath, fileSizeLocal, fileSizeS3,
+        checkUploadStatus( bucketName, file.getName(), s3PathPrefix, fileSizeLocal, fileSizeS3,
                 successfulCount, failedUploads );
     }
 
@@ -183,6 +207,11 @@ public class S3ClientWrapper {
 
         log.error( "Error during S3 upload - key={}, Error={}", initialPath, e.getMessage() );
         failedUploads.add( new S3OperationRecord( bucketName, "N/A", localFilePath, -1, e.getMessage() ) );
+    }
+
+    private void handleInterruptedException( InterruptedException e, Path initialPath ) {
+        Thread.currentThread().interrupt();
+        log.error( "Error during S3 upload - Key={}, Message={}", initialPath, e.getMessage() );
     }
 
     private ProgressListener getProgressListener( final AtomicLong totalBytes ) {

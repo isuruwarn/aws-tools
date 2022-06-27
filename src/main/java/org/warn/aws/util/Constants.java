@@ -17,6 +17,8 @@ public class Constants {
 
     public static final String OPERATION_PUT = "put";
 
+    public static final String OPTION_FILE = "-f";
+
     public static final String MSG_UNSUPPORTED = "Unsupported operation!";
     public static final String MSG_CONFIGURE_CREDENTIALS = "Please configure the AWS credentials";
     public static final String MSG_INVALID_FILEPATH = "Please provide a valid file or directory";

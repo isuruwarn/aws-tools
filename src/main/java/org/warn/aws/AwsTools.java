@@ -76,7 +76,6 @@ public class AwsTools {
 
                 String s3Operation = args[1];
                 String bucketName = args[2];
-                String localFilePath = args[3];
 
                 validateOperation(s3Operation);
 
@@ -84,13 +83,26 @@ public class AwsTools {
                         executorService );
 
                 if( Constants.OPERATION_PUT.equals( s3Operation ) ) {
+                    String fourthArg = args[3];
+                    boolean uploadFromList = false;
+                    int localFilePathIndex = 3;
+                    int s3PathPrefixIndex = 4;
+
+                    if( Constants.OPTION_FILE.equals(fourthArg) ) {
+                        uploadFromList = true;
+                        localFilePathIndex++;
+                        s3PathPrefixIndex++;
+                    }
+
+                    String localFilePath = args[localFilePathIndex];
+
                     String s3PathPrefix = null;
-                    if( args.length > 4 )
-                        s3PathPrefix = args[4];
+                    if( args.length > s3PathPrefixIndex )
+                        s3PathPrefix = args[s3PathPrefixIndex];
 
                     log.info("Initializing S3 {} operation - BucketName={}, s3PathPrefix={}",
                             s3Operation, bucketName, s3PathPrefix );
-                    s3ClientWrapper.putObject( bucketName, localFilePath, s3PathPrefix );
+                    s3ClientWrapper.putObject( bucketName, localFilePath, s3PathPrefix, uploadFromList );
                 }
 
             } else {
