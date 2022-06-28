@@ -14,5 +14,5 @@ NAME
     
 SYNOPSIS
     [credentials] accessKey secretKey region
-    [s3] [put] bucketName fileOrDirectoryPath (s3PathPrefix)
+    [s3] [put] bucketName [-f|-d|-l] fileOrDirectoryPath (s3PathPrefix)
 ```

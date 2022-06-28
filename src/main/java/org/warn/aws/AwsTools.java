@@ -2,10 +2,10 @@ package org.warn.aws;
 
 import com.amazonaws.regions.Regions;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.lang3.StringUtils;
 import org.warn.aws.s3.client.S3ClientWrapper;
 import org.warn.aws.util.ConfigConstants;
 import org.warn.aws.util.Constants;
+import org.warn.aws.util.ValidationsUtil;
 import org.warn.utils.config.PropertiesHelper;
 import org.warn.utils.config.UserConfig;
 
@@ -23,9 +23,8 @@ public class AwsTools {
             ConfigConstants.AWSTOOLS_DIR_NAME, ConfigConstants.CONFIG_FILE);
 
     public static void main( String [] args ) throws InterruptedException {
-
         // initial argument length check
-        checkArgsLength( args.length, 1 );
+        ValidationsUtil.checkArgsLength( args.length, 1 );
 
         try {
             String currentAppVersion = PropertiesHelper
@@ -36,7 +35,6 @@ public class AwsTools {
             String accessKey;
             String secretKey;
             String region;
-
             String command = args[0];
             if( Constants.COMMAND_CREDENTIALS.equals(command) ) {
                 Scanner scanner = new Scanner(System.in);
@@ -57,56 +55,42 @@ public class AwsTools {
                 scanner.close();
                 System.exit(1);
             }
-
             accessKey = userConfig.getProperty( ConfigConstants.PROP_ACCESS_KEY );
             secretKey = userConfig.getProperty( ConfigConstants.PROP_SECRET_KEY );
             region = userConfig.getProperty( ConfigConstants.PROP_REGION );
             log.info("Aws Region - " + region );
 
-            if( StringUtils.isEmpty(accessKey) || StringUtils.isEmpty(accessKey) || StringUtils.isEmpty(accessKey) ) {
-                System.out.println();
-                System.err.println( Constants.MSG_CONFIGURE_CREDENTIALS );
-                System.out.println( Constants.USAGE );
-                System.exit(1);
-            }
+            ValidationsUtil.checkIfCredentialsAreProvided( accessKey, secretKey, region );
 
             if (Constants.COMMAND_S3.equals(command)) {
-
-                checkArgsLength(args.length, 4);
+                ValidationsUtil.checkArgsLength(args.length, 5);
 
                 String s3Operation = args[1];
                 String bucketName = args[2];
-
-                validateOperation(s3Operation);
+                ValidationsUtil.validateOperation(s3Operation);
+                ValidationsUtil.checkIfBucketNameIsProvided(bucketName);
 
                 S3ClientWrapper s3ClientWrapper = new S3ClientWrapper( accessKey, secretKey, Regions.fromName(region),
                         executorService );
 
                 if( Constants.OPERATION_PUT.equals( s3Operation ) ) {
-                    String fourthArg = args[3];
-                    boolean uploadFromList = false;
-                    int localFilePathIndex = 3;
-                    int s3PathPrefixIndex = 4;
+                    String optionType = args[3];
+                    ValidationsUtil.validateOption( optionType );
 
-                    if( Constants.OPTION_FILE.equals(fourthArg) ) {
-                        uploadFromList = true;
-                        localFilePathIndex++;
-                        s3PathPrefixIndex++;
-                    }
-
-                    String localFilePath = args[localFilePathIndex];
-
+                    String localFilePath = args[4];
                     String s3PathPrefix = null;
-                    if( args.length > s3PathPrefixIndex )
-                        s3PathPrefix = args[s3PathPrefixIndex];
+                    if( args.length > 5 )
+                        s3PathPrefix = args[5];
 
                     log.info("Initializing S3 {} operation - BucketName={}, s3PathPrefix={}",
                             s3Operation, bucketName, s3PathPrefix );
-                    s3ClientWrapper.putObject( bucketName, localFilePath, s3PathPrefix, uploadFromList );
+                    log.info("Option={}, fileOrDirectory={}", optionType, localFilePath);
+
+                    s3ClientWrapper.putObject( bucketName, localFilePath, s3PathPrefix, optionType );
                 }
 
             } else {
-                handleUnsupportedOperation();
+                ValidationsUtil.handleUnsupported( Constants.MSG_UNSUPPORTED_OPERATION, command );
             }
 
         } finally {
@@ -114,25 +98,5 @@ public class AwsTools {
             executorService.awaitTermination(5, TimeUnit.MINUTES );
         }
 
-    }
-
-    private static void checkArgsLength( int argsLength, int expectedLength ) {
-        if( argsLength < expectedLength ) {
-            System.out.println( Constants.USAGE );
-            System.exit(1);
-        }
-    }
-
-    private static void validateOperation( String operation ) {
-        if( !Constants.SUPPORTED_OPERATIONS_LIST.contains( operation ) )
-            handleUnsupportedOperation();
-    }
-
-    private static void handleUnsupportedOperation() {
-        System.out.println();
-        System.err.println( Constants.MSG_UNSUPPORTED );
-        System.out.println();
-        System.out.println( Constants.USAGE );
-        System.exit(1);
     }
 }
